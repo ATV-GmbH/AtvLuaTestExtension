@@ -68,7 +68,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
 	let disposable = vscode.commands.registerCommand("atvluatest.start", () => {});
 	context.subscriptions.push(disposable);
 
-	disposable = vscode.commands.registerCommand("atvluatest.execute", executeTestScript);
+	disposable = vscode.commands.registerCommand("atvluatest.loadAndRun", loadAndRunTestScript);
 	context.subscriptions.push(disposable);
 
 	disposable = vscode.commands.registerCommand("atvluatest.printErrors", printDeviceErrors);
@@ -87,7 +87,7 @@ function registerCommands(context: vscode.ExtensionContext): void {
 /**
  * Command to execute the test script.
  */
-function executeTestScript(): void {
+function loadAndRunTestScript(): void {
 
 	if (!checkDeviceIsConnected()) {
 		return;
@@ -206,6 +206,8 @@ function disconnectFromDevice() :  void {
 function deviceConnected() : void {
 	_deviceConnected = true;
 	vscode.window.showInformationMessage(`Connected to ${_deviceAddress}.`);
+
+	// sendDataToDevice("*IDN?\r\n");
 
 	// show errors
 	sendDataToDevice("localnode.showerrors=1\r\n");

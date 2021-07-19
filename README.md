@@ -13,7 +13,7 @@ This extension simplifies the development of Lua tests for the 26xx series measu
 Command | Description | Default key binding
 ------- | ----------- | -------------------
 ATV Lua test: Start | Start the extension and connect to the device | Ctrl + Alt + s
-ATV Lua test: Execute | Load and runs the currently edited Lua script | Ctrl + Alt + e
+ATV Lua test: Load+Run | Load and runs the currently edited Lua script | Ctrl + Alt + r
 ATV Lua test: Print errors | Prints the errors stored in the device error queue | Ctrl + Alt + p
 ATV Lua test: Connect | Connect to the device |
 ATV Lua test: Disconnect | Disconnect from the device |
