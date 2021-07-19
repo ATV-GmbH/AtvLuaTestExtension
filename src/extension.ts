@@ -7,7 +7,7 @@ import * as net from 'net';
 var _terminal : vscode.Terminal | null = null;
 var _terminalWriteEmitter : vscode.EventEmitter<string> | null = null;
 
-var _deviceAddress : string = "127.0.0.1";
+var _deviceAddress : string = "192.168.100.2";
 var _deviceSocket : net.Socket | null = null;
 var _deviceConnected : boolean = false;
 
@@ -206,6 +206,9 @@ function disconnectFromDevice() :  void {
 function deviceConnected() : void {
 	_deviceConnected = true;
 	vscode.window.showInformationMessage(`Connected to ${_deviceAddress}.`);
+
+	// show errors
+	sendDataToDevice("localnode.showerrors=1\r\n");
 }
 
 /**
