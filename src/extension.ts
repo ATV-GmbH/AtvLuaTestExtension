@@ -2,8 +2,11 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 import * as net from 'net';
+import { generateKeySync } from 'crypto';
 
 // global variables
+var _context : vscode.ExtensionContext | null = null;
+
 var _terminal : vscode.Terminal | null = null;
 var _terminalWriteEmitter : vscode.EventEmitter<string> | null = null;
 
@@ -11,12 +14,20 @@ var _deviceAddress : string = "192.168.100.2";
 var _deviceSocket : net.Socket | null = null;
 var _deviceConnected : boolean = false;
 
+// current input line
+var _inputLine : string = "";
+
+// terminal indicator
+const _terminalPrompt : string = ">>> ";
+
 /**
  * This method is called when the extension is activated.
  * @param context VS code extension context.
  */
 export async function activate(context: vscode.ExtensionContext) : Promise<void> {
 	
+    _context = context;
+
 	// extension started info
 	vscode.window.showInformationMessage("ATV Lua test extension started");
 
@@ -51,8 +62,8 @@ function createTerminal(): void {
 
 	const terminal: vscode.Pseudoterminal = {
 		onDidWrite: _terminalWriteEmitter.event,
-		open: () => {},
-		close: () => {},
+		open: () => { },
+		close: () => { },
 		handleInput: (data) => handleTerminalInput(data)
 	};
 
@@ -120,11 +131,13 @@ function printDeviceErrors(): void {
 		return;
 	}
 
-	let script = "for _ = 1, errorqueue.count do";
+	let script = "if errorqueue.count == 0 then print(\"no errors\") else";
+    script += " for _ = 1, errorqueue.count do";
 	script += " local code, message, severity, errorNode = errorqueue.next()";
 	script += " print(code, message)";
 	script += " end";
-	script += " errorqueue.clear()\r\n";
+	script += " errorqueue.clear()";
+    script += " end\r\n";
 
 	sendDataToDevice(script);
 
@@ -138,6 +151,19 @@ function printDeviceErrors(): void {
  * @param data The input data to send.
  */
 function handleTerminalInput(data : string) : void {
+
+    // switch (data) {
+    //     case "\r": // enter
+    //         _terminalWriteEmitter?.fire(_inputLine + "\r\n");
+    //         break;
+
+    //     case "\x7f": // backspace
+    //         break;
+
+    //     default:
+    //         break;
+    // }
+
 
 	let str = data.replace("\r", "\r\n");
 
@@ -207,10 +233,9 @@ function deviceConnected() : void {
 	_deviceConnected = true;
 	vscode.window.showInformationMessage(`Connected to ${_deviceAddress}.`);
 
-	// sendDataToDevice("*IDN?\r\n");
-
 	// show errors
 	sendDataToDevice("localnode.showerrors=1\r\n");
+	sendDataToDevice("*IDN?\r\n");
 }
 
 /**
@@ -241,9 +266,22 @@ function deviceConnectionClosed() {
  */
 async function getDeviceAddress() : Promise<void> {
 
+    let devAddr : string | undefined = _deviceAddress;
+    
+    if (_context) {
+        devAddr = await _context.workspaceState.get("AtvLuaTestExtDeviceAddr");
+        if (devAddr) {
+            _deviceAddress = devAddr;
+        }
+    }
+
 	const str = await vscode.window.showInputBox({ title : "Please enter the device address:", value : _deviceAddress });
 
 	if (str) {
 		_deviceAddress = str;
+
+        if (_context) {
+            await _context.workspaceState.update("AtvLuaTestExtDeviceAddr", _deviceAddress);
+        }
 	}
 }
