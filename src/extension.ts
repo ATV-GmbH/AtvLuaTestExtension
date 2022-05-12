@@ -6,9 +6,13 @@ import * as net from 'net';
 // global variables
 var _context : vscode.ExtensionContext | null = null;
 
+// Terminal
 var _terminal : vscode.Terminal | null = null;
 var _terminalWriteEmitter : vscode.EventEmitter<string> | null = null;
+var _terminalColumns : number = 0;
+var _terminalRows : number = 0;
 
+// Device
 var _deviceAddress : string = "192.168.100.2";
 var _deviceSocket : net.Socket | null = null;
 var _deviceConnected : boolean = false;
@@ -63,9 +67,10 @@ function createTerminal(): void {
 
 	const terminal: vscode.Pseudoterminal = {
 		onDidWrite: _terminalWriteEmitter.event,
-		open: () => handleTerminalOpen(),
+		open: (initialDimensions) => handleTerminalOpen(initialDimensions),
 		close: () => { },
-		handleInput: (data) => handleTerminalInput(data)
+		handleInput: (data) => handleTerminalInput(data),
+        setDimensions: (dimensions) => handleTerminalSetDimensions(dimensions)
 	};
 
 	_terminal = vscode.window.createTerminal( { name: "ATV Lua test", pty: terminal } );
@@ -148,14 +153,25 @@ function printDeviceErrors(): void {
 }
 
 /**
- * Wird aufgerufen wenn das Terminal geöffnet wird.
+ * Is called when terminal is open.
  */
-function handleTerminalOpen() : void {
+function handleTerminalOpen(initialDimensions: vscode.TerminalDimensions | undefined) : void {
 
     _terminalWriteEmitter?.fire("Terminal open\r\n");
 
     _inputLine = "";
     _inputLinePos = 0;
+
+    _terminalColumns = initialDimensions?.columns || 0;
+    _terminalRows = initialDimensions?.rows || 0;
+}
+
+/**
+ * Is called when terminal dimensions changes.
+ */
+function handleTerminalSetDimensions(dimensions: vscode.TerminalDimensions) : void {
+    _terminalColumns = dimensions.columns;
+    _terminalRows = dimensions.rows;
 }
 
 /**
@@ -163,8 +179,6 @@ function handleTerminalOpen() : void {
  * @param data The input data to send.
  */
 function handleTerminalInput(data : string) : void {
-
-    // TODO: Problem mit Backspace wenn der Cursor in eine neue Zeile wandert
 
     switch (data) {
         case "\r": // enter
@@ -193,6 +207,7 @@ function handleTerminalInput(data : string) : void {
 
         case "\x1b[2~": // insert
             // ignore
+            _terminalWriteEmitter?.fire("X\x1b[C");
             break;
 
         case "\x1b[D": // cursor left
@@ -213,19 +228,7 @@ function handleTerminalInput(data : string) : void {
 
         default:
             if (data.length === 1) {
-
-                if (_inputLinePos === _inputLine.length) {
-                    // append char
-                    _inputLine += data;
-                    _inputLinePos++;
-                    _terminalWriteEmitter?.fire(data);
-                 }
-                 else {
-                     // insert char
-                    _inputLine = insertString(_inputLine, data, _inputLinePos);
-                    _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + "\x1b[u\x1b[C");
-                    _inputLinePos++;
-                }
+                handleInputChar(data);
             }
             break;
     }
@@ -296,6 +299,7 @@ function deviceConnected() : void {
 
 const _searchCR : RegExp = /\r/g;
 const _searchLF : RegExp = /\n/g;
+
 /**
  * Is called when device data is received.
  * @param data The device data.
@@ -369,11 +373,14 @@ function removeStringAt(str : string, position : number, count : number) : strin
  * Handle input "Enter".
  */
 function handleInputEnter() : void {
+
+    handleInputEnd();
     _terminalWriteEmitter?.fire("\r\n");
 
     if (_inputLine.trim().length > 0) {
         
         // _terminalWriteEmitter?.fire(">>>" + _inputLine + "<<<\r\n");
+
         addInputLineToHistory(_inputLine);
         sendDataToDevice(_inputLine + "\n");
     }
@@ -397,10 +404,23 @@ function handleInputPasteClipboard() : void {
  * Handle input "Backspace".
  */
 function handleInputBackspace() : void {
+
     if (_inputLinePos > 0) {
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+
         _inputLinePos--;
         _inputLine = removeStringAt(_inputLine, _inputLinePos, 1);
-        _terminalWriteEmitter?.fire("\x1b[D\x1b[P");
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[A\x1b[" + _terminalColumns.toString() + "C\x1b[P");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[D\x1b[P");
+        }
+
+        if (_inputLinePos < _inputLine.length) {
+            _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + " \x1b[u");
+        }
     }
 }
 
@@ -418,9 +438,18 @@ function handleInputDelete() : void {
  * Handle input "Home".
  */
 function handleInputHome() : void {
+
     while (_inputLinePos > 0) {
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+
         _inputLinePos--;
-        _terminalWriteEmitter?.fire("\x1b[D");
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[A\x1b[" + _terminalColumns.toString() + "C");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[D");
+        }
     }
 }
 
@@ -428,9 +457,18 @@ function handleInputHome() : void {
  * Handle input "End".
  */
 function handleInputEnd() : void {
+    
     while (_inputLinePos < _inputLine.length) {
         _inputLinePos++;
-        _terminalWriteEmitter?.fire("\x1b[C");
+
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[" + _terminalColumns.toString() + "D\x1b[B");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[C");
+        }
     }
 }
 
@@ -438,9 +476,18 @@ function handleInputEnd() : void {
  * Handle input "Cursor left".
  */
 function handleInputCursorLeft() : void {
+
     if (_inputLinePos > 0) {
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+        
         _inputLinePos--;
-        _terminalWriteEmitter?.fire("\x1b[D");
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[A\x1b[" + _terminalColumns.toString() + "C");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[D");
+        }
     }
 }
 
@@ -448,9 +495,18 @@ function handleInputCursorLeft() : void {
  * Handle input "Cursor right".
  */
 function handleInputCursorRight() : void {
+
     if (_inputLinePos < _inputLine.length) {
         _inputLinePos++;
-        _terminalWriteEmitter?.fire("\x1b[C");
+        
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[" + _terminalColumns.toString() + "D\x1b[B");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[C");
+        }
     }
 }
 
@@ -458,16 +514,57 @@ function handleInputCursorRight() : void {
  * Handle input "Cursor up".
  */
 function handleInputCursorUp() : void {
+
     _inputLine = getInputLineFromHistoryUpwards();
-    _terminalWriteEmitter?.fire("\r\x1b[J" + _inputLine);
+
+    handleInputHome();
+    _terminalWriteEmitter?.fire("\x1b[J" + _inputLine);
+
+    _inputLinePos = _inputLine.length;
 }
 
 /**
  * Handle input "Cursor down".
  */
 function handleInputCursorDown() : void {
+    
     _inputLine = getInputLineFromHistoryDownwards();
-    _terminalWriteEmitter?.fire("\r\x1b[J" + _inputLine);
+
+    handleInputHome();
+    _terminalWriteEmitter?.fire("\x1b[J" + _inputLine);
+
+    _inputLinePos = _inputLine.length;
+}
+
+/**
+ * Handle input of normal character.
+ * @param char The input character.
+ */
+function handleInputChar(char : string) : void {
+
+    if (_inputLinePos === _inputLine.length) {
+        // append char
+        _inputLine += char;
+        _inputLinePos++;
+        _terminalWriteEmitter?.fire(char);
+     }
+     else {
+
+        // insert char
+        _inputLine = insertString(_inputLine, char, _inputLinePos);
+        _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + "\x1b[u");
+
+        _inputLinePos++;
+
+        let cursorRowChange : boolean = _inputLinePos % _terminalColumns === 0;
+
+        if (cursorRowChange) {
+            _terminalWriteEmitter?.fire("\x1b[" + _terminalColumns.toString() + "D\x1b[B");
+        }
+        else {
+            _terminalWriteEmitter?.fire("\x1b[C");
+        }
+    }
 }
 
 /**
