@@ -2,7 +2,6 @@
 // Import the module and reference it with the alias vscode in your code below
 import * as vscode from 'vscode';
 import * as net from 'net';
-import { generateKeySync } from 'crypto';
 
 // global variables
 var _context : vscode.ExtensionContext | null = null;
@@ -16,9 +15,7 @@ var _deviceConnected : boolean = false;
 
 // current input line
 var _inputLine : string = "";
-
-// terminal indicator
-const _terminalPrompt : string = ">>> ";
+var _inputLinePos : number = 0;
 
 /**
  * This method is called when the extension is activated.
@@ -62,7 +59,7 @@ function createTerminal(): void {
 
 	const terminal: vscode.Pseudoterminal = {
 		onDidWrite: _terminalWriteEmitter.event,
-		open: () => { },
+		open: () => handleTerminalOpen(),
 		close: () => { },
 		handleInput: (data) => handleTerminalInput(data)
 	};
@@ -147,31 +144,86 @@ function printDeviceErrors(): void {
 }
 
 /**
+ * Wird aufgerufen wenn das Terminal geöffnet wird.
+ */
+function handleTerminalOpen() : void {
+
+    _terminalWriteEmitter?.fire("Terminal open\r\n");
+
+    _inputLine = "";
+    _inputLinePos = 0;
+}
+
+/**
  * Send the terminal input to the device.
  * @param data The input data to send.
  */
 function handleTerminalInput(data : string) : void {
 
-    // switch (data) {
-    //     case "\r": // enter
-    //         _terminalWriteEmitter?.fire(_inputLine + "\r\n");
-    //         break;
+    // TODO: Problem mit Backspace wenn der Cursor in eine neue Zeile wandert
 
-    //     case "\x7f": // backspace
-    //         break;
+    switch (data) {
+        case "\r": // enter
+            handleInputEnter();
+            break;
 
-    //     default:
-    //         break;
-    // }
+        case "\u0016": // paste clipboard
+            handleInputPasteClipboard();
+            break;
 
+        case "\x7f": // backspace
+            handleInputBackspace();
+            break;
+        
+        case "\x1b[3~": // delete
+            break;
 
-	let str = data.replace("\r", "\r\n");
+        case "\x1b[H": // home
+            handleInputHome();
+            break;
 
-	// output to terminal
-	_terminalWriteEmitter?.fire(str);
+        case "\x1b[F": // end
+            handleInputEnd();
+            break;
 
-	// send to device
-	sendDataToDevice(str);
+        case "\x1b[2~": // insert
+            // ignore
+            break;
+
+        case "\x1b[D": // cursor left
+            handleInputCursorLeft();
+            break;
+
+        case "\x1b[C": // cursor right
+            handleInputCursorRight();
+            break;
+
+        case "\x1b[A": // cursor up
+            handleInputCursorUp();
+            break;
+
+        case "\x1b[B": // cursor down
+            handleInputCursorDown();
+            break;
+
+        default:
+            if (data.length === 1) {
+
+                if (_inputLinePos === _inputLine.length) {
+                    // append char
+                    _inputLine += data;
+                    _inputLinePos += 1;
+                    _terminalWriteEmitter?.fire(data);
+                 }
+                 else {
+                     // insert char
+                    _inputLine = insertString(_inputLine, data, _inputLinePos);
+                    _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + "\x1b[u\x1b[C");
+                    _inputLinePos += 1;
+                }
+            }
+            break;
+    }
 }
 
 /**
@@ -235,9 +287,10 @@ function deviceConnected() : void {
 
 	// show errors
 	sendDataToDevice("localnode.showerrors=1\r\n");
-	sendDataToDevice("*IDN?\r\n");
 }
 
+const _searchCR : RegExp = /\r/g;
+const _searchLF : RegExp = /\n/g;
 /**
  * Is called when device data is received.
  * @param data The device data.
@@ -246,9 +299,8 @@ function deviceDataReceived(data : Buffer) {
 
 	let str = data.toString();
 
-	str = str.replace("\r\n", "\n");
-	str = str.replace("\r", "\n");
-	str = str.replace("\n", "\r\n");
+	str = str.replace(_searchCR, "");
+	str = str.replace(_searchLF, "\r\n");
 
 	_terminalWriteEmitter?.fire(str);
 }
@@ -285,3 +337,115 @@ async function getDeviceAddress() : Promise<void> {
         }
 	}
 }
+
+/**
+ * Insert string in an other string at position.
+ * @param str The string where the string shall be inserted.
+ * @param strToInsert The string to be inserted.
+ * @param position The position where to insert the string.
+ * @returns The enw string.
+ */
+function insertString(str : string, strToInsert : string, position : number) : string {
+    return str.substring(0, position) + strToInsert + str.substring(position);
+}
+
+/**
+ * Removes a part of a string.
+ * @param str The string where the part shall be removed.
+ * @param position The position where the part shall be removed.
+ * @param count The number of characters to be removed.
+ * @returns The new string.
+ */
+function removeStringAt(str : string, position : number, count : number) : string {
+    return str.substring(0, position) + str.substring(position + count);
+}
+
+/**
+ * Handle input "Enter".
+ */
+function handleInputEnter() : void {
+    _terminalWriteEmitter?.fire("\r\n");
+
+    if (_inputLine.trim().length > 0) {
+        _terminalWriteEmitter?.fire(">>>" + _inputLine + "<<<\r\n");
+        sendDataToDevice(_inputLine + "\n");
+    }
+
+    _inputLine = "";
+    _inputLinePos = 0;
+}
+
+/**
+ * Handle input Ctrl + V (paste).
+ */
+function handleInputPasteClipboard() : void {
+    vscode.env.clipboard.readText().then((text) => {
+        _inputLine = insertString(_inputLine, text, _inputLinePos);
+        _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + "\x1b[u\x1b[" + text.length + "C");
+        _inputLinePos += text.length;
+    });
+}
+
+/**
+ * Handle input "Backspace".
+ */
+function handleInputBackspace() : void {
+    if (_inputLinePos > 0) {
+        _inputLinePos -= 1;
+        _inputLine = removeStringAt(_inputLine, _inputLinePos, 1);
+        _terminalWriteEmitter?.fire("\x1b[D\x1b[P");
+    }
+}
+
+/**
+ * Handle input "Home".
+ */
+function handleInputHome() : void {
+    while (_inputLinePos > 0) {
+        _inputLinePos -= 1;
+        _terminalWriteEmitter?.fire("\x1b[D");
+    }
+}
+
+/**
+ * Handle input "End".
+ */
+function handleInputEnd() : void {
+    while (_inputLinePos < _inputLine.length) {
+        _inputLinePos += 1;
+        _terminalWriteEmitter?.fire("\x1b[C");
+    }
+}
+
+/**
+ * Handle input "Cursor left".
+ */
+function handleInputCursorLeft() : void {
+    if (_inputLinePos > 0) {
+        _inputLinePos -= 1;
+        _terminalWriteEmitter?.fire("\x1b[D");
+    }
+}
+
+/**
+ * Handle input "Cursor right".
+ */
+function handleInputCursorRight() : void {
+    if (_inputLinePos < _inputLine.length) {
+        _inputLinePos += 1;
+        _terminalWriteEmitter?.fire("\x1b[C");
+    }
+}
+
+/**
+ * Handle input "Cursor up".
+ */
+function handleInputCursorUp() : void {
+}
+
+/**
+ * Handle input "Cursor down".
+ */
+function handleInputCursorDown() : void {
+}
+
