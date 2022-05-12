@@ -17,6 +17,10 @@ var _deviceConnected : boolean = false;
 var _inputLine : string = "";
 var _inputLinePos : number = 0;
 
+// input history
+var _inputLineHistory : string[] = [];
+var _inputLineHistoryPos : number = -1;
+
 /**
  * This method is called when the extension is activated.
  * @param context VS code extension context.
@@ -176,6 +180,7 @@ function handleTerminalInput(data : string) : void {
             break;
         
         case "\x1b[3~": // delete
+            handleInputDelete();
             break;
 
         case "\x1b[H": // home
@@ -212,14 +217,14 @@ function handleTerminalInput(data : string) : void {
                 if (_inputLinePos === _inputLine.length) {
                     // append char
                     _inputLine += data;
-                    _inputLinePos += 1;
+                    _inputLinePos++;
                     _terminalWriteEmitter?.fire(data);
                  }
                  else {
                      // insert char
                     _inputLine = insertString(_inputLine, data, _inputLinePos);
                     _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + "\x1b[u\x1b[C");
-                    _inputLinePos += 1;
+                    _inputLinePos++;
                 }
             }
             break;
@@ -367,7 +372,9 @@ function handleInputEnter() : void {
     _terminalWriteEmitter?.fire("\r\n");
 
     if (_inputLine.trim().length > 0) {
-        _terminalWriteEmitter?.fire(">>>" + _inputLine + "<<<\r\n");
+        
+        // _terminalWriteEmitter?.fire(">>>" + _inputLine + "<<<\r\n");
+        addInputLineToHistory(_inputLine);
         sendDataToDevice(_inputLine + "\n");
     }
 
@@ -391,9 +398,19 @@ function handleInputPasteClipboard() : void {
  */
 function handleInputBackspace() : void {
     if (_inputLinePos > 0) {
-        _inputLinePos -= 1;
+        _inputLinePos--;
         _inputLine = removeStringAt(_inputLine, _inputLinePos, 1);
         _terminalWriteEmitter?.fire("\x1b[D\x1b[P");
+    }
+}
+
+/**
+ * Handle input "Delete".
+ */
+function handleInputDelete() : void {
+    if (_inputLinePos < _inputLine.length) {
+        _inputLine = removeStringAt(_inputLine, _inputLinePos, 1);
+        _terminalWriteEmitter?.fire("\x1b[s" + _inputLine.substring(_inputLinePos) + " \x1b[u");
     }
 }
 
@@ -402,7 +419,7 @@ function handleInputBackspace() : void {
  */
 function handleInputHome() : void {
     while (_inputLinePos > 0) {
-        _inputLinePos -= 1;
+        _inputLinePos--;
         _terminalWriteEmitter?.fire("\x1b[D");
     }
 }
@@ -412,7 +429,7 @@ function handleInputHome() : void {
  */
 function handleInputEnd() : void {
     while (_inputLinePos < _inputLine.length) {
-        _inputLinePos += 1;
+        _inputLinePos++;
         _terminalWriteEmitter?.fire("\x1b[C");
     }
 }
@@ -422,7 +439,7 @@ function handleInputEnd() : void {
  */
 function handleInputCursorLeft() : void {
     if (_inputLinePos > 0) {
-        _inputLinePos -= 1;
+        _inputLinePos--;
         _terminalWriteEmitter?.fire("\x1b[D");
     }
 }
@@ -432,7 +449,7 @@ function handleInputCursorLeft() : void {
  */
 function handleInputCursorRight() : void {
     if (_inputLinePos < _inputLine.length) {
-        _inputLinePos += 1;
+        _inputLinePos++;
         _terminalWriteEmitter?.fire("\x1b[C");
     }
 }
@@ -441,11 +458,73 @@ function handleInputCursorRight() : void {
  * Handle input "Cursor up".
  */
 function handleInputCursorUp() : void {
+    _inputLine = getInputLineFromHistoryUpwards();
+    _terminalWriteEmitter?.fire("\r\x1b[J" + _inputLine);
 }
 
 /**
  * Handle input "Cursor down".
  */
 function handleInputCursorDown() : void {
+    _inputLine = getInputLineFromHistoryDownwards();
+    _terminalWriteEmitter?.fire("\r\x1b[J" + _inputLine);
+}
+
+/**
+ * Adds an input line to the input line history.
+ * @param inputLine The input line to be added.
+ */
+function addInputLineToHistory(inputLine : string) : void {
+
+    if ((_inputLineHistory.length > 0) && (inputLine === _inputLineHistory[_inputLineHistory.length - 1])) {
+        return;
+    }
+
+    _inputLineHistory.push(_inputLine);
+
+    while (_inputLineHistory.length > 100) {
+        _inputLineHistory.shift();
+    }
+
+    _inputLineHistoryPos = _inputLineHistory.length - 1;
+}
+
+/**
+ * Returns input line from history upwards.
+ * @returns Input line from history.
+ */
+function getInputLineFromHistoryUpwards() : string {
+
+    if (_inputLineHistory.length === 0) {
+        return "";
+    }
+
+    let str : string = _inputLineHistory[_inputLineHistoryPos];
+
+    _inputLineHistoryPos--;
+    if (_inputLineHistoryPos < 0) {
+        _inputLineHistoryPos = 0;
+    }
+
+    return str;
+}
+
+/**
+ * Returns input line from history downwards.
+ * @returns Input line from history.
+ */
+ function getInputLineFromHistoryDownwards() : string {
+
+    if (_inputLineHistory.length === 0) {
+        return "";
+    }
+
+    _inputLineHistoryPos++;
+    if (_inputLineHistoryPos >= _inputLineHistory.length) {
+        _inputLineHistoryPos = _inputLineHistory.length - 1;
+        return "";
+    }
+
+    return _inputLineHistory[_inputLineHistoryPos];
 }
 
